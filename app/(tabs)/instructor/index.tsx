@@ -1,11 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TextStyle,
   View,
 } from 'react-native';
@@ -15,207 +13,28 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius, Spacing, Typography } from '@/src/ui/theme';
 import { CompactBrandHeader } from '@/src/ui/components/BrandHeader';
 import { useInstructorStore } from '@/src/stores/instructorStore';
+import { useAuthStore } from '@/src/stores/authStore';
 import type { CourseSession } from '@/src/models';
 
-// ── PIN dots ──────────────────────────────────────────────────────────────────
+// ── Not-an-instructor gate ────────────────────────────────────────────────────
 
-function PinDots({ filled }: { filled: number }) {
-  return (
-    <View style={pd.row}>
-      {Array.from({ length: 6 }).map((_, i) => (
-        <View
-          key={i}
-          style={[pd.dot, { backgroundColor: i < filled ? Colors.thalosNavy : Colors.systemGray5 }]}
-        />
-      ))}
-    </View>
-  );
-}
-const pd = StyleSheet.create({
-  row: { flexDirection: 'row', gap: 16, alignItems: 'center' },
-  dot: { width: 16, height: 16, borderRadius: 8 },
-});
-
-// ── Form field (setup) ────────────────────────────────────────────────────────
-
-function FormField({
-  label, icon, value, onChangeText, placeholder,
-}: { label: string; icon: string; value: string; onChangeText: (v: string) => void; placeholder?: string }) {
-  return (
-    <View style={s.formField}>
-      <View style={s.formFieldLabel}>
-        <Ionicons name={icon as any} size={13} color={Colors.textSecondary} />
-        <Text style={s.formFieldLabelText}>{label}</Text>
-      </View>
-      <TextInput
-        style={s.formFieldInput}
-        value={value}
-        onChangeText={onChangeText}
-        placeholder={placeholder}
-        placeholderTextColor={Colors.textTertiary}
-        autoCapitalize="words"
-      />
-    </View>
-  );
-}
-
-// ── Setup Screen ──────────────────────────────────────────────────────────────
-
-function SetupScreen({ onComplete }: { onComplete: () => void }) {
+function NotInstructorScreen() {
   const insets = useSafeAreaInsets();
-  const { setPin, saveProfile } = useInstructorStore();
-  const [name, setName]             = useState('');
-  const [instrNum, setInstrNum]     = useState('');
-  const [certLevel, setCertLevel]   = useState('');
-  const [pin, setPinVal]            = useState('');
-  const [confirmPin, setConfirmPin] = useState('');
-  const [error, setError]           = useState('');
-
-  function handleComplete() {
-    if (!name.trim())      { setError('Full name is required.'); return; }
-    if (pin.length < 4)    { setError('PIN must be at least 4 digits.'); return; }
-    if (pin !== confirmPin){ setError('PINs do not match.'); return; }
-    setError('');
-    saveProfile(name.trim(), instrNum.trim() || null, certLevel.trim() || null);
-    setPin(pin);
-    onComplete();
-  }
-
+  const router = useRouter();
   return (
-    <ScrollView
-      style={[s.container, { paddingTop: insets.top }]}
-      contentContainerStyle={s.setupContent}
-      keyboardShouldPersistTaps="handled"
-    >
-      <View style={s.setupHeader}>
-        <Ionicons name="person-circle" size={60} color={Colors.accentBlue} />
-        <Text style={s.setupTitle}>Instructor Setup</Text>
-        <Text style={s.setupDesc}>
-          Create your instructor profile and a PIN to secure access to student and course data.
-        </Text>
-      </View>
-
-      <View style={s.formCard}>
-        <FormField label="Full Name"            icon="person"   value={name}      onChangeText={setName}      placeholder="Your full name" />
-        <FormField label="Instructor #"         icon="id-card"  value={instrNum}  onChangeText={setInstrNum}  placeholder="Optional" />
-        <FormField label="Certification Level"  icon="star"     value={certLevel} onChangeText={setCertLevel} placeholder="e.g. Instructor, Course Director" />
-
-        <View style={s.divider} />
-
-        <Text style={s.pinLabel}>Create a PIN</Text>
-        <TextInput
-          style={s.pinField}
-          placeholder="PIN (4+ digits)"
-          placeholderTextColor={Colors.textTertiary}
-          value={pin}
-          onChangeText={v => setPinVal(v.replace(/\D/g, '').slice(0, 10))}
-          keyboardType="number-pad"
-          secureTextEntry
-        />
-        <TextInput
-          style={[s.pinField, { marginTop: Spacing.sm }]}
-          placeholder="Confirm PIN"
-          placeholderTextColor={Colors.textTertiary}
-          value={confirmPin}
-          onChangeText={v => setConfirmPin(v.replace(/\D/g, '').slice(0, 10))}
-          keyboardType="number-pad"
-          secureTextEntry
-        />
-      </View>
-
-      {error ? <Text style={s.errorText}>{error}</Text> : null}
-
-      <Pressable
-        style={({ pressed }) => [s.completeBtn, pressed && { opacity: 0.85 }]}
-        onPress={handleComplete}
-      >
-        <Text style={s.completeBtnText}>Complete Setup</Text>
-      </Pressable>
-
-      <View style={{ height: insets.bottom + Spacing.xl }} />
-    </ScrollView>
-  );
-}
-
-// ── Login Screen ──────────────────────────────────────────────────────────────
-
-function LoginScreen({ onUnlock }: { onUnlock: () => void }) {
-  const insets = useSafeAreaInsets();
-  const { verifyPin, resetPin, profile } = useInstructorStore();
-  const [pin, setPin] = useState('');
-  const [error, setError] = useState('');
-  const inputRef = useRef<TextInput>(null);
-
-  useEffect(() => {
-    const t = setTimeout(() => inputRef.current?.focus(), 400);
-    return () => clearTimeout(t);
-  }, []);
-
-  function handlePinChange(text: string) {
-    const digits = text.replace(/\D/g, '').slice(0, 10);
-    setPin(digits);
-    setError('');
-  }
-
-  function handleUnlock() {
-    if (!verifyPin(pin)) {
-      setError('Incorrect PIN. Please try again.');
-      setPin('');
-      return;
-    }
-    onUnlock();
-  }
-
-  function handleReset() {
-    Alert.alert(
-      'Reset Instructor Setup',
-      'This will delete your PIN and profile. You will need to set up again.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Reset', style: 'destructive', onPress: () => resetPin() },
-      ],
-    );
-  }
-
-  return (
-    <View style={[s.container, s.loginRoot, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <View style={{ flex: 1 }} />
-
-      <CompactBrandHeader section="" style={s.loginBrandHeader} />
-      <Text style={s.loginTitle}>Instructor Mode</Text>
-      <Text style={s.loginSubtitle}>
-        {profile?.name ? `Welcome back, ${profile.name}` : 'Enter your PIN to unlock'}
+    <View style={[s.container, s.loginRoot, { paddingTop: insets.top + Spacing.xl, paddingBottom: insets.bottom }]}>
+      <Ionicons name="school" size={64} color={Colors.accentBlue} />
+      <Text style={s.setupTitle}>Instructor Module</Text>
+      <Text style={s.setupDesc}>
+        This section is for certified instructors. Update your account role to Instructor to access
+        student management, courses, and skill sign-offs.
       </Text>
-
-      <Pressable style={s.pinDotsArea} onPress={() => inputRef.current?.focus()}>
-        <PinDots filled={pin.length} />
-      </Pressable>
-
-      <TextInput
-        ref={inputRef}
-        style={s.hiddenInput}
-        value={pin}
-        onChangeText={handlePinChange}
-        keyboardType="number-pad"
-        secureTextEntry
-        caretHidden
-        onSubmitEditing={handleUnlock}
-      />
-
-      {error ? <Text style={s.errorText}>{error}</Text> : null}
-
       <Pressable
-        style={({ pressed }) => [s.unlockBtn, pressed && { opacity: 0.85 }]}
-        onPress={handleUnlock}
+        style={({ pressed }) => [s.completeBtn, { width: '80%', marginTop: Spacing.lg }, pressed && { opacity: 0.85 }]}
+        onPress={() => router.push('/account/profile')}
       >
-        <Text style={s.unlockBtnText}>Unlock</Text>
+        <Text style={s.completeBtnText}>Update My Role</Text>
       </Pressable>
-
-      <Pressable style={s.resetLink} onPress={handleReset}>
-        <Text style={s.resetLinkText}>Forgot PIN? Reset setup</Text>
-      </Pressable>
-
-      <View style={{ flex: 2 }} />
     </View>
   );
 }
@@ -256,9 +75,10 @@ function Dashboard() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const {
-    profile, students, courses, lock,
+    profile, students, courses,
     loadStudents, loadCourses, getSessions,
   } = useInstructorStore();
+  const { profile: authProfile } = useAuthStore();
 
   useFocusEffect(useCallback(() => {
     loadStudents();
@@ -302,11 +122,13 @@ function Dashboard() {
           <CompactBrandHeader section="" style={s.dashBrand} />
           <Text style={s.dashSectionTitle}>Instructor</Text>
           <View style={{ flex: 1 }} />
-          <Pressable style={s.lockBtn} onPress={lock}>
-            <Ionicons name="lock-closed" size={20} color={Colors.textSecondary} />
+          <Pressable style={s.lockBtn} onPress={() => router.push('/account/profile')}>
+            <Ionicons name="person-circle-outline" size={22} color={Colors.textSecondary} />
           </Pressable>
         </View>
-        {profile?.name ? (
+        {authProfile?.displayName ? (
+          <Text style={s.welcomeText}>Welcome, {authProfile.displayName}</Text>
+        ) : profile?.name ? (
           <Text style={s.welcomeText}>Welcome, {profile.name}</Text>
         ) : null}
       </View>
@@ -363,15 +185,14 @@ function Dashboard() {
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 export default function InstructorTabView() {
-  const { isUnlocked, hasPinConfigured, loadPinState, loadProfile, unlock } = useInstructorStore();
+  const { loadProfile } = useInstructorStore();
+  const { profile: authProfile } = useAuthStore();
 
   useFocusEffect(useCallback(() => {
-    loadPinState();
     loadProfile();
   }, []));
 
-  if (!hasPinConfigured) return <SetupScreen onComplete={unlock} />;
-  if (!isUnlocked)       return <LoginScreen onUnlock={unlock} />;
+  if (authProfile?.role !== 'instructor') return <NotInstructorScreen />;
   return <Dashboard />;
 }
 

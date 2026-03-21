@@ -1,61 +1,55 @@
 -- Thalos — Supabase Setup
 -- Run this in your Supabase project's SQL Editor.
--- Creates all tables needed for cloud features (collab + community discovery).
+-- Full setup: auth profiles, community discovery, buddy collaboration, enrollments.
 
 -- ═══════════════════════════════════════════════════════════════════════════════
--- 1. Buddy Collaboration Tables
+-- 1. User Profiles
+--    Auto-created when a user signs up via the handle_new_user() trigger.
 -- ═══════════════════════════════════════════════════════════════════════════════
 
-CREATE TABLE collab_sessions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  host_device_id TEXT NOT NULL,
-  host_name TEXT,
-  site_name TEXT,
-  dive_date TEXT,
-  depth_max REAL,
-  bottom_time INTEGER,
+CREATE TABLE profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  display_name TEXT,
+  role TEXT NOT NULL DEFAULT 'diver' CHECK (role IN ('diver', 'instructor')),
+  cert_level TEXT,
+  cert_agency TEXT,
+  phone TEXT,
+  avatar_url TEXT,
+  instructor_number TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '30 days')
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE session_members (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id UUID REFERENCES collab_sessions(id) ON DELETE CASCADE,
-  device_id TEXT NOT NULL,
-  diver_name TEXT,
-  instagram_handle TEXT,
-  tiktok_handle TEXT,
-  facebook_handle TEXT,
-  twitter_handle TEXT,
-  joined_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(session_id, device_id)
-);
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
-CREATE TABLE session_media (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id UUID REFERENCES collab_sessions(id) ON DELETE CASCADE,
-  uploader_device_id TEXT NOT NULL,
-  uploader_name TEXT,
-  storage_path TEXT NOT NULL,
-  media_type TEXT NOT NULL CHECK (media_type IN ('photo','video')),
-  caption TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
+CREATE POLICY "Users can read own profile"
+  ON profiles FOR SELECT USING (auth.uid() = id);
 
--- RLS: link-based access — anyone with the session ID can read/write
-ALTER TABLE collab_sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE session_members ENABLE ROW LEVEL SECURITY;
-ALTER TABLE session_media ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can update own profile"
+  ON profiles FOR UPDATE USING (auth.uid() = id);
 
-CREATE POLICY "public read"   ON collab_sessions FOR SELECT USING (true);
-CREATE POLICY "public insert" ON collab_sessions FOR INSERT WITH CHECK (true);
-CREATE POLICY "public read"   ON session_members FOR SELECT USING (true);
-CREATE POLICY "public insert" ON session_members FOR INSERT WITH CHECK (true);
-CREATE POLICY "public read"   ON session_media FOR SELECT USING (true);
-CREATE POLICY "public insert" ON session_media FOR INSERT WITH CHECK (true);
+CREATE POLICY "Instructors visible to authenticated users"
+  ON profiles FOR SELECT USING (
+    role = 'instructor' AND auth.uid() IS NOT NULL
+  );
 
--- NOTE: Create a "collab-media" storage bucket (public) in the Supabase dashboard
--- for session_media file uploads.
+-- Auto-create profile row on sign-up
+CREATE OR REPLACE FUNCTION handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO profiles (id, display_name, role)
+  VALUES (
+    NEW.id,
+    NEW.raw_user_meta_data->>'display_name',
+    COALESCE(NEW.raw_user_meta_data->>'role', 'diver')
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION handle_new_user();
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- 2. Community Discovery Tables
@@ -65,7 +59,8 @@ CREATE POLICY "public insert" ON session_media FOR INSERT WITH CHECK (true);
 
 CREATE TABLE community_classes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  claim_code TEXT NOT NULL,
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  claim_code TEXT,            -- legacy fallback for unauthenticated posts
   is_active BOOLEAN DEFAULT TRUE,
   title TEXT NOT NULL,
   agency TEXT,
@@ -89,17 +84,26 @@ CREATE TABLE community_classes (
 
 ALTER TABLE community_classes ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "public read active"  ON community_classes FOR SELECT USING (is_active = TRUE);
-CREATE POLICY "public insert"       ON community_classes FOR INSERT WITH CHECK (true);
-CREATE POLICY "owner delete"        ON community_classes FOR DELETE USING (true);
+CREATE POLICY "Anyone can read active classes"
+  ON community_classes FOR SELECT USING (is_active = TRUE);
 
-CREATE INDEX idx_classes_active_date ON community_classes (is_active, created_at DESC);
+CREATE POLICY "Authenticated users can post classes"
+  ON community_classes FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Owner can update own class"
+  ON community_classes FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Owner can delete own class"
+  ON community_classes FOR DELETE USING (auth.uid() = user_id);
+
+CREATE INDEX idx_classes_active ON community_classes (is_active, created_at DESC);
 
 -- ── Trips ────────────────────────────────────────────────────────────────────
 
 CREATE TABLE community_trips (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  claim_code TEXT NOT NULL,
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  claim_code TEXT,
   is_active BOOLEAN DEFAULT TRUE,
   title TEXT NOT NULL,
   destination TEXT NOT NULL,
@@ -123,17 +127,26 @@ CREATE TABLE community_trips (
 
 ALTER TABLE community_trips ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "public read active"  ON community_trips FOR SELECT USING (is_active = TRUE);
-CREATE POLICY "public insert"       ON community_trips FOR INSERT WITH CHECK (true);
-CREATE POLICY "owner delete"        ON community_trips FOR DELETE USING (true);
+CREATE POLICY "Anyone can read active trips"
+  ON community_trips FOR SELECT USING (is_active = TRUE);
 
-CREATE INDEX idx_trips_active_date ON community_trips (is_active, created_at DESC);
+CREATE POLICY "Authenticated users can post trips"
+  ON community_trips FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Owner can update own trip"
+  ON community_trips FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Owner can delete own trip"
+  ON community_trips FOR DELETE USING (auth.uid() = user_id);
+
+CREATE INDEX idx_trips_active ON community_trips (is_active, created_at DESC);
 
 -- ── Dive Centers ─────────────────────────────────────────────────────────────
 
 CREATE TABLE community_dive_centers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  claim_code TEXT NOT NULL,
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  claim_code TEXT,
   is_active BOOLEAN DEFAULT TRUE,
   name TEXT NOT NULL,
   type TEXT NOT NULL,
@@ -155,8 +168,113 @@ CREATE TABLE community_dive_centers (
 
 ALTER TABLE community_dive_centers ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "public read active"  ON community_dive_centers FOR SELECT USING (is_active = TRUE);
-CREATE POLICY "public insert"       ON community_dive_centers FOR INSERT WITH CHECK (true);
-CREATE POLICY "owner delete"        ON community_dive_centers FOR DELETE USING (true);
+CREATE POLICY "Anyone can read active centers"
+  ON community_dive_centers FOR SELECT USING (is_active = TRUE);
 
-CREATE INDEX idx_centers_active_date ON community_dive_centers (is_active, created_at DESC);
+CREATE POLICY "Authenticated users can post centers"
+  ON community_dive_centers FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Owner can update own center"
+  ON community_dive_centers FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Owner can delete own center"
+  ON community_dive_centers FOR DELETE USING (auth.uid() = user_id);
+
+CREATE INDEX idx_centers_active ON community_dive_centers (is_active, created_at DESC);
+
+-- ── Class Enrollments ─────────────────────────────────────────────────────────
+
+CREATE TABLE class_enrollments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  class_id UUID NOT NULL REFERENCES community_classes(id) ON DELETE CASCADE,
+  student_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'confirmed', 'cancelled')),
+  enrolled_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(class_id, student_id)
+);
+
+ALTER TABLE class_enrollments ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Students can read own enrollments"
+  ON class_enrollments FOR SELECT USING (auth.uid() = student_id);
+
+CREATE POLICY "Instructors can read enrollments for their class"
+  ON class_enrollments FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM community_classes
+      WHERE id = class_id AND user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Students can enroll"
+  ON class_enrollments FOR INSERT WITH CHECK (auth.uid() = student_id);
+
+CREATE POLICY "Instructors can update enrollment status"
+  ON class_enrollments FOR UPDATE USING (
+    EXISTS (
+      SELECT 1 FROM community_classes
+      WHERE id = class_id AND user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Students can cancel own enrollment"
+  ON class_enrollments FOR DELETE USING (auth.uid() = student_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 3. Buddy Collaboration Tables
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE collab_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  host_device_id TEXT NOT NULL,
+  host_user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  host_name TEXT,
+  site_name TEXT,
+  dive_date TEXT,
+  depth_max REAL,
+  bottom_time INTEGER,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '30 days')
+);
+
+CREATE TABLE session_members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID REFERENCES collab_sessions(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  diver_name TEXT,
+  instagram_handle TEXT,
+  tiktok_handle TEXT,
+  facebook_handle TEXT,
+  twitter_handle TEXT,
+  joined_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(session_id, device_id)
+);
+
+CREATE TABLE session_media (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID REFERENCES collab_sessions(id) ON DELETE CASCADE,
+  uploader_device_id TEXT NOT NULL,
+  uploader_user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  uploader_name TEXT,
+  storage_path TEXT NOT NULL,
+  media_type TEXT NOT NULL CHECK (media_type IN ('photo','video')),
+  caption TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE collab_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE session_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE session_media   ENABLE ROW LEVEL SECURITY;
+
+-- Collab is link-based: anyone with the session ID can read/join
+CREATE POLICY "public read"   ON collab_sessions FOR SELECT USING (true);
+CREATE POLICY "public insert" ON collab_sessions FOR INSERT WITH CHECK (true);
+CREATE POLICY "public read"   ON session_members FOR SELECT USING (true);
+CREATE POLICY "public insert" ON session_members FOR INSERT WITH CHECK (true);
+CREATE POLICY "public read"   ON session_media   FOR SELECT USING (true);
+CREATE POLICY "public insert" ON session_media   FOR INSERT WITH CHECK (true);
+
+-- NOTE: Create a "collab-media" storage bucket (public) in the Supabase
+-- dashboard for session_media file uploads.

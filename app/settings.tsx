@@ -8,9 +8,11 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { ThalosLogo } from '@/src/ui/components/ThalosLogo';
 import { Colors, Radius, Shadow, Spacing, Typography } from '@/src/ui/theme';
 import { useUIStore } from '@/src/stores/uiStore';
+import { useAuthStore } from '@/src/stores/authStore';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 type UnitSystem = 'metric' | 'imperial';
@@ -59,6 +61,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { themeMode, setThemeMode, unitSystem, setUnitSystem } = useUIStore();
+  const { user, profile } = useAuthStore();
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -78,6 +81,27 @@ export default function SettingsScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
+        {/* Account */}
+        <SectionLabel label="ACCOUNT" />
+        <Pressable
+          style={styles.accountCard}
+          onPress={() => router.push('/account/profile')}
+        >
+          <View style={styles.accountAvatar}>
+            <Ionicons name="person" size={26} color={Colors.thalosNavy} />
+          </View>
+          <View style={styles.accountInfo}>
+            <Text style={styles.accountName} numberOfLines={1}>
+              {profile?.displayName ?? user?.email ?? 'My Account'}
+            </Text>
+            <Text style={styles.accountRole}>
+              {profile?.role === 'instructor' ? '🎓 Instructor' : '🤿 Diver'}
+              {profile?.certLevel ? ` · ${profile.certLevel}` : ''}
+            </Text>
+          </View>
+          <Text style={styles.rowChevron}>›</Text>
+        </Pressable>
+
         {/* Appearance */}
         <SectionLabel label="APPEARANCE" />
         <View style={styles.card}>
@@ -229,6 +253,23 @@ const styles = StyleSheet.create({
   rowLabel: { ...Typography.body, color: Colors.text, flex: 1 },
   rowChevron: { ...Typography.title3, color: Colors.textTertiary },
   separator: { height: 1, backgroundColor: Colors.border, marginVertical: 2 },
+  accountCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  accountAvatar: {
+    width: 52, height: 52, borderRadius: 26,
+    backgroundColor: Colors.accentBlue + '18',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  accountInfo: { flex: 1, gap: 2 },
+  accountName: { ...Typography.subhead, fontWeight: '600', color: Colors.text },
+  accountRole: { ...Typography.caption1, color: Colors.textSecondary },
   aboutCard: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
