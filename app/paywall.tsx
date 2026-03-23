@@ -92,9 +92,10 @@ export default function PaywallScreen() {
   const { packages, loading, purchaseError, fetchPackages, purchasePackage, restorePurchases, isActive } = useSubscriptionStore();
 
   const [selectedPkg, setSelectedPkg] = useState<PurchasesPackage | null>(null);
+  const [fetchDone, setFetchDone]     = useState(false);
 
   useEffect(() => {
-    fetchPackages();
+    fetchPackages().finally(() => setFetchDone(true));
   }, []);
 
   // Pre-select annual plan
@@ -197,6 +198,13 @@ export default function PaywallScreen() {
         <Pressable onPress={handleRestore} style={s.restoreBtn} disabled={loading}>
           <Text style={s.restoreText}>Restore Purchases</Text>
         </Pressable>
+
+        {/* Skip — only shown when store isn't configured yet (no packages loaded) */}
+        {fetchDone && packages.length === 0 && (
+          <Pressable onPress={() => router.replace('/(tabs)/home')} style={s.restoreBtn}>
+            <Text style={[s.restoreText, { color: Colors.textTertiary }]}>Skip for now</Text>
+          </Pressable>
+        )}
 
         {/* Legal */}
         <View style={s.legalRow}>

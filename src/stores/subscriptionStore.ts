@@ -7,8 +7,7 @@ import Purchases, {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-// Replace with your RevenueCat iOS API key from the RevenueCat dashboard
-export const RC_API_KEY = 'appl_REPLACE_WITH_YOUR_REVENUECAT_API_KEY';
+export const RC_API_KEY = 'test_lsgfUFWWWbiKEuFsNCEVqquGzmJ';
 
 // The entitlement identifier you'll create in the RevenueCat dashboard
 export const ENTITLEMENT_ID = 'premium';

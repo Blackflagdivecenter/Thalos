@@ -53,10 +53,11 @@ async function handleAuthDeepLink(url: string) {
 // ── Auth + Subscription gate hook ─────────────────────────────────────────────
 
 function useAuthGate(initialized: boolean, subInitialized: boolean) {
-  const user     = useAuthStore(s => s.user);
-  const isActive = useSubscriptionStore(s => s.isActive);
-  const router   = useRouter();
-  const segments = useSegments();
+  const user       = useAuthStore(s => s.user);
+  const isActive   = useSubscriptionStore(s => s.isActive);
+  const hasPackages = useSubscriptionStore(s => s.packages.length > 0);
+  const router     = useRouter();
+  const segments   = useSegments();
 
   useEffect(() => {
     if (!initialized || !subInitialized) return;
@@ -64,23 +65,20 @@ function useAuthGate(initialized: boolean, subInitialized: boolean) {
     const inPaywall = segments[0] === 'paywall';
 
     if (!user && !inAuth) {
-      // Not logged in → auth screens
       router.replace('/auth/login');
     } else if (user && inAuth) {
-      // Just logged in — subscription gate next
-      if (isActive) {
+      if (isActive || !hasPackages) {
         router.replace('/(tabs)');
       } else {
         router.replace('/paywall');
       }
-    } else if (user && !isActive && !inPaywall) {
-      // Logged in but no subscription → paywall
+    } else if (user && !isActive && hasPackages && !inPaywall) {
+      // Only enforce paywall when RC has actually loaded products
       router.replace('/paywall');
     } else if (user && isActive && inPaywall) {
-      // Already subscribed, somehow on paywall → app
       router.replace('/(tabs)');
     }
-  }, [user, isActive, initialized, subInitialized, segments]);
+  }, [user, isActive, hasPackages, initialized, subInitialized, segments]);
 }
 
 // ── Root Layout ───────────────────────────────────────────────────────────────
