@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useColors } from '@/src/hooks/useColors';
 import { useUIStore } from '@/src/stores/uiStore';
+import { useAuthStore } from '@/src/stores/authStore';
 
 // ── Tab config ────────────────────────────────────────────────────────────────
 
@@ -181,6 +182,9 @@ const tb = StyleSheet.create({
 // ── Root layout ───────────────────────────────────────────────────────────────
 
 export default function TabsLayout() {
+  const profile = useAuthStore(s => s.profile);
+  const isInstructor = profile?.role === 'instructor';
+
   return (
     <Tabs
       tabBar={(props) => <FloatingTabBar {...props} />}
@@ -193,7 +197,11 @@ export default function TabsLayout() {
         <Tabs.Screen
           key={tab.name}
           name={tab.name}
-          options={{ title: tab.label }}
+          options={{
+            title: tab.label,
+            // Hide instructor tab entirely for diver accounts
+            href: tab.name === 'instructor/index' && !isInstructor ? null : undefined,
+          }}
         />
       ))}
     </Tabs>
