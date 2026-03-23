@@ -28,28 +28,12 @@ const studentRepo    = new StudentRepository();
 const courseRepo     = new CourseRepository();
 const instructorRepo = new InstructorRepository();
 
-const PIN_KEY = 'instructor_pin';
-
-function encodePin(pin: string): string {
-  return btoa(`${pin}:thalos_instructor`);
-}
-
 interface InstructorState {
-  isUnlocked: boolean;
-  hasPinConfigured: boolean;
   profile: InstructorProfile | null;
 
   // Data
   students: Student[];
   courses: InstructorCourse[];
-
-  // Auth
-  loadPinState: () => void;
-  setPin: (pin: string) => void;
-  verifyPin: (pin: string) => boolean;
-  resetPin: () => void;
-  unlock: () => void;
-  lock: () => void;
 
   // Profile
   loadProfile: () => void;
@@ -110,58 +94,9 @@ interface InstructorState {
 }
 
 export const useInstructorStore = create<InstructorState>((set, get) => ({
-  isUnlocked:       false,
-  hasPinConfigured: false,
-  profile:          null,
-  students:         [],
-  courses:          [],
-
-  // ── Auth ───────────────────────────────────────────────────────────────────
-
-  loadPinState: () => {
-    try {
-      const db  = getDb();
-      const row = db.getFirstSync<{ value: string }>(
-        `SELECT value FROM app_settings WHERE key=?`, [PIN_KEY],
-      );
-      set({ hasPinConfigured: !!row?.value });
-    } catch { /* DB may not be ready */ }
-  },
-
-  setPin: (pin) => {
-    try {
-      const db  = getDb();
-      const now = nowISO();
-      db.runSync(
-        `INSERT OR REPLACE INTO app_settings (key,value,updated_at) VALUES (?,?,?)`,
-        [PIN_KEY, encodePin(pin), now],
-      );
-      set({ hasPinConfigured: true, isUnlocked: true });
-    } catch { /* ignore */ }
-  },
-
-  verifyPin: (pin) => {
-    try {
-      const db  = getDb();
-      const row = db.getFirstSync<{ value: string }>(
-        `SELECT value FROM app_settings WHERE key=?`, [PIN_KEY],
-      );
-      return row?.value === encodePin(pin);
-    } catch {
-      return false;
-    }
-  },
-
-  resetPin: () => {
-    try {
-      const db = getDb();
-      db.runSync(`DELETE FROM app_settings WHERE key=?`, [PIN_KEY]);
-    } catch { /* ignore */ }
-    set({ hasPinConfigured: false, isUnlocked: false });
-  },
-
-  unlock: () => set({ isUnlocked: true }),
-  lock:   () => set({ isUnlocked: false }),
+  profile:  null,
+  students: [],
+  courses:  [],
 
   // ── Profile ────────────────────────────────────────────────────────────────
 

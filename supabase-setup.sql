@@ -1,13 +1,13 @@
 -- Thalos — Supabase Setup
 -- Run this in your Supabase project's SQL Editor.
--- Full setup: auth profiles, community discovery, buddy collaboration, enrollments.
+-- Safe to run even if collab tables already exist — uses IF NOT EXISTS throughout.
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- 1. User Profiles
 --    Auto-created when a user signs up via the handle_new_user() trigger.
 -- ═══════════════════════════════════════════════════════════════════════════════
 
-CREATE TABLE profiles (
+CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   display_name TEXT,
   role TEXT NOT NULL DEFAULT 'diver' CHECK (role IN ('diver', 'instructor')),
@@ -22,16 +22,34 @@ CREATE TABLE profiles (
 
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can read own profile"
-  ON profiles FOR SELECT USING (auth.uid() = id);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename='profiles' AND policyname='Users can read own profile'
+  ) THEN
+    CREATE POLICY "Users can read own profile"
+      ON profiles FOR SELECT USING (auth.uid() = id);
+  END IF;
+END $$;
 
-CREATE POLICY "Users can update own profile"
-  ON profiles FOR UPDATE USING (auth.uid() = id);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename='profiles' AND policyname='Users can update own profile'
+  ) THEN
+    CREATE POLICY "Users can update own profile"
+      ON profiles FOR UPDATE USING (auth.uid() = id);
+  END IF;
+END $$;
 
-CREATE POLICY "Instructors visible to authenticated users"
-  ON profiles FOR SELECT USING (
-    role = 'instructor' AND auth.uid() IS NOT NULL
-  );
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename='profiles' AND policyname='Instructors visible to authenticated users'
+  ) THEN
+    CREATE POLICY "Instructors visible to authenticated users"
+      ON profiles FOR SELECT USING (
+        role = 'instructor' AND auth.uid() IS NOT NULL
+      );
+  END IF;
+END $$;
 
 -- Auto-create profile row on sign-up
 CREATE OR REPLACE FUNCTION handle_new_user()
@@ -47,6 +65,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION handle_new_user();
@@ -55,12 +74,12 @@ CREATE TRIGGER on_auth_user_created
 -- 2. Community Discovery Tables
 -- ═══════════════════════════════════════════════════════════════════════════════
 
--- ── Classes ──────────────────────────────────────────────────────────────────
+-- ── Classes ───────────────────────────────────────────────────────────────────
 
-CREATE TABLE community_classes (
+CREATE TABLE IF NOT EXISTS community_classes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
-  claim_code TEXT,            -- legacy fallback for unauthenticated posts
+  claim_code TEXT,
   is_active BOOLEAN DEFAULT TRUE,
   title TEXT NOT NULL,
   agency TEXT,
@@ -84,23 +103,32 @@ CREATE TABLE community_classes (
 
 ALTER TABLE community_classes ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Anyone can read active classes"
-  ON community_classes FOR SELECT USING (is_active = TRUE);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_classes' AND policyname='Anyone can read active classes') THEN
+    CREATE POLICY "Anyone can read active classes" ON community_classes FOR SELECT USING (is_active = TRUE);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_classes' AND policyname='Authenticated users can post classes') THEN
+    CREATE POLICY "Authenticated users can post classes" ON community_classes FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_classes' AND policyname='Owner can update own class') THEN
+    CREATE POLICY "Owner can update own class" ON community_classes FOR UPDATE USING (auth.uid() = user_id);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_classes' AND policyname='Owner can delete own class') THEN
+    CREATE POLICY "Owner can delete own class" ON community_classes FOR DELETE USING (auth.uid() = user_id);
+  END IF;
+END $$;
 
-CREATE POLICY "Authenticated users can post classes"
-  ON community_classes FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
-
-CREATE POLICY "Owner can update own class"
-  ON community_classes FOR UPDATE USING (auth.uid() = user_id);
-
-CREATE POLICY "Owner can delete own class"
-  ON community_classes FOR DELETE USING (auth.uid() = user_id);
-
-CREATE INDEX idx_classes_active ON community_classes (is_active, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_classes_active ON community_classes (is_active, created_at DESC);
 
 -- ── Trips ────────────────────────────────────────────────────────────────────
 
-CREATE TABLE community_trips (
+CREATE TABLE IF NOT EXISTS community_trips (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   claim_code TEXT,
@@ -127,23 +155,32 @@ CREATE TABLE community_trips (
 
 ALTER TABLE community_trips ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Anyone can read active trips"
-  ON community_trips FOR SELECT USING (is_active = TRUE);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_trips' AND policyname='Anyone can read active trips') THEN
+    CREATE POLICY "Anyone can read active trips" ON community_trips FOR SELECT USING (is_active = TRUE);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_trips' AND policyname='Authenticated users can post trips') THEN
+    CREATE POLICY "Authenticated users can post trips" ON community_trips FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_trips' AND policyname='Owner can update own trip') THEN
+    CREATE POLICY "Owner can update own trip" ON community_trips FOR UPDATE USING (auth.uid() = user_id);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_trips' AND policyname='Owner can delete own trip') THEN
+    CREATE POLICY "Owner can delete own trip" ON community_trips FOR DELETE USING (auth.uid() = user_id);
+  END IF;
+END $$;
 
-CREATE POLICY "Authenticated users can post trips"
-  ON community_trips FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_trips_active ON community_trips (is_active, created_at DESC);
 
-CREATE POLICY "Owner can update own trip"
-  ON community_trips FOR UPDATE USING (auth.uid() = user_id);
+-- ── Dive Centers ──────────────────────────────────────────────────────────────
 
-CREATE POLICY "Owner can delete own trip"
-  ON community_trips FOR DELETE USING (auth.uid() = user_id);
-
-CREATE INDEX idx_trips_active ON community_trips (is_active, created_at DESC);
-
--- ── Dive Centers ─────────────────────────────────────────────────────────────
-
-CREATE TABLE community_dive_centers (
+CREATE TABLE IF NOT EXISTS community_dive_centers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   claim_code TEXT,
@@ -168,23 +205,32 @@ CREATE TABLE community_dive_centers (
 
 ALTER TABLE community_dive_centers ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Anyone can read active centers"
-  ON community_dive_centers FOR SELECT USING (is_active = TRUE);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_dive_centers' AND policyname='Anyone can read active centers') THEN
+    CREATE POLICY "Anyone can read active centers" ON community_dive_centers FOR SELECT USING (is_active = TRUE);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_dive_centers' AND policyname='Authenticated users can post centers') THEN
+    CREATE POLICY "Authenticated users can post centers" ON community_dive_centers FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_dive_centers' AND policyname='Owner can update own center') THEN
+    CREATE POLICY "Owner can update own center" ON community_dive_centers FOR UPDATE USING (auth.uid() = user_id);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='community_dive_centers' AND policyname='Owner can delete own center') THEN
+    CREATE POLICY "Owner can delete own center" ON community_dive_centers FOR DELETE USING (auth.uid() = user_id);
+  END IF;
+END $$;
 
-CREATE POLICY "Authenticated users can post centers"
-  ON community_dive_centers FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
-
-CREATE POLICY "Owner can update own center"
-  ON community_dive_centers FOR UPDATE USING (auth.uid() = user_id);
-
-CREATE POLICY "Owner can delete own center"
-  ON community_dive_centers FOR DELETE USING (auth.uid() = user_id);
-
-CREATE INDEX idx_centers_active ON community_dive_centers (is_active, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_centers_active ON community_dive_centers (is_active, created_at DESC);
 
 -- ── Class Enrollments ─────────────────────────────────────────────────────────
 
-CREATE TABLE class_enrollments (
+CREATE TABLE IF NOT EXISTS class_enrollments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   class_id UUID NOT NULL REFERENCES community_classes(id) ON DELETE CASCADE,
   student_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -196,36 +242,43 @@ CREATE TABLE class_enrollments (
 
 ALTER TABLE class_enrollments ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Students can read own enrollments"
-  ON class_enrollments FOR SELECT USING (auth.uid() = student_id);
-
-CREATE POLICY "Instructors can read enrollments for their class"
-  ON class_enrollments FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM community_classes
-      WHERE id = class_id AND user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Students can enroll"
-  ON class_enrollments FOR INSERT WITH CHECK (auth.uid() = student_id);
-
-CREATE POLICY "Instructors can update enrollment status"
-  ON class_enrollments FOR UPDATE USING (
-    EXISTS (
-      SELECT 1 FROM community_classes
-      WHERE id = class_id AND user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Students can cancel own enrollment"
-  ON class_enrollments FOR DELETE USING (auth.uid() = student_id);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='class_enrollments' AND policyname='Students can read own enrollments') THEN
+    CREATE POLICY "Students can read own enrollments" ON class_enrollments FOR SELECT USING (auth.uid() = student_id);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='class_enrollments' AND policyname='Instructors can read enrollments for their class') THEN
+    CREATE POLICY "Instructors can read enrollments for their class"
+      ON class_enrollments FOR SELECT USING (
+        EXISTS (SELECT 1 FROM community_classes WHERE id = class_id AND user_id = auth.uid())
+      );
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='class_enrollments' AND policyname='Students can enroll') THEN
+    CREATE POLICY "Students can enroll" ON class_enrollments FOR INSERT WITH CHECK (auth.uid() = student_id);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='class_enrollments' AND policyname='Instructors can update enrollment status') THEN
+    CREATE POLICY "Instructors can update enrollment status"
+      ON class_enrollments FOR UPDATE USING (
+        EXISTS (SELECT 1 FROM community_classes WHERE id = class_id AND user_id = auth.uid())
+      );
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='class_enrollments' AND policyname='Students can cancel own enrollment') THEN
+    CREATE POLICY "Students can cancel own enrollment" ON class_enrollments FOR DELETE USING (auth.uid() = student_id);
+  END IF;
+END $$;
 
 -- ═══════════════════════════════════════════════════════════════════════════════
--- 3. Buddy Collaboration Tables
+-- 3. Buddy Collaboration Tables (upgrade existing — add user_id columns)
 -- ═══════════════════════════════════════════════════════════════════════════════
 
-CREATE TABLE collab_sessions (
+CREATE TABLE IF NOT EXISTS collab_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   host_device_id TEXT NOT NULL,
   host_user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
@@ -238,7 +291,11 @@ CREATE TABLE collab_sessions (
   expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '30 days')
 );
 
-CREATE TABLE session_members (
+-- Add user_id columns to existing collab tables if they don't exist
+ALTER TABLE collab_sessions
+  ADD COLUMN IF NOT EXISTS host_user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS session_members (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id UUID REFERENCES collab_sessions(id) ON DELETE CASCADE,
   device_id TEXT NOT NULL,
@@ -252,7 +309,10 @@ CREATE TABLE session_members (
   UNIQUE(session_id, device_id)
 );
 
-CREATE TABLE session_media (
+ALTER TABLE session_members
+  ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS session_media (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id UUID REFERENCES collab_sessions(id) ON DELETE CASCADE,
   uploader_device_id TEXT NOT NULL,
@@ -264,17 +324,43 @@ CREATE TABLE session_media (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+ALTER TABLE session_media
+  ADD COLUMN IF NOT EXISTS uploader_user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
 ALTER TABLE collab_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session_media   ENABLE ROW LEVEL SECURITY;
 
--- Collab is link-based: anyone with the session ID can read/join
-CREATE POLICY "public read"   ON collab_sessions FOR SELECT USING (true);
-CREATE POLICY "public insert" ON collab_sessions FOR INSERT WITH CHECK (true);
-CREATE POLICY "public read"   ON session_members FOR SELECT USING (true);
-CREATE POLICY "public insert" ON session_members FOR INSERT WITH CHECK (true);
-CREATE POLICY "public read"   ON session_media   FOR SELECT USING (true);
-CREATE POLICY "public insert" ON session_media   FOR INSERT WITH CHECK (true);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='collab_sessions' AND policyname='public read') THEN
+    CREATE POLICY "public read"   ON collab_sessions FOR SELECT USING (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='collab_sessions' AND policyname='public insert') THEN
+    CREATE POLICY "public insert" ON collab_sessions FOR INSERT WITH CHECK (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='session_members' AND policyname='public read') THEN
+    CREATE POLICY "public read"   ON session_members FOR SELECT USING (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='session_members' AND policyname='public insert') THEN
+    CREATE POLICY "public insert" ON session_members FOR INSERT WITH CHECK (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='session_media' AND policyname='public read') THEN
+    CREATE POLICY "public read"   ON session_media FOR SELECT USING (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='session_media' AND policyname='public insert') THEN
+    CREATE POLICY "public insert" ON session_media FOR INSERT WITH CHECK (true);
+  END IF;
+END $$;
 
 -- NOTE: Create a "collab-media" storage bucket (public) in the Supabase
 -- dashboard for session_media file uploads.

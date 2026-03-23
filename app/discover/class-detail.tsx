@@ -8,7 +8,8 @@ import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Radius, Spacing, Typography } from '@/src/ui/theme';
-import { communityService, CommunityClass } from '@/src/services/CommunityService';
+import { communityService, CommunityClass, ClassEnrollment } from '@/src/services/CommunityService';
+import { useAuthStore } from '@/src/stores/authStore';
 
 function formatDateRange(start: string | null, end: string | null): string {
   if (!start && !end) return '—';
@@ -37,22 +38,33 @@ export default function ClassDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
+  const { user, profile } = useAuthStore();
   const [item, setItem] = useState<CommunityClass | null>(null);
   const [loading, setLoading] = useState(true);
   const [showDelete, setShowDelete] = useState(false);
   const [claimInput, setClaimInput] = useState('');
   const [deleting, setDeleting] = useState(false);
 
+  // Enrollment state
+  const [myEnrollment, setMyEnrollment]   = useState<ClassEnrollment | null>(null);
+  const [enrollments, setEnrollments]     = useState<ClassEnrollment[]>([]);
+  const [enrolling, setEnrolling]         = useState(false);
+  const [showEnrollments, setShowEnrollments] = useState(false);
+
   useEffect(() => {
     if (!id) return;
-    communityService.getClassById(id).then(c => {
+    Promise.all([
+      communityService.getClassById(id),
+      user ? communityService.getMyEnrollment(id) : Promise.resolve(null),
+    ]).then(([c, myE]) => {
       setItem(c);
+      setMyEnrollment(myE);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [id]);
+  }, [id, user]);
 
   async function handleDelete() {
-    if (!item || !claimInput.trim()) return;
+    if (!item) return;
     setDeleting(true);
     const ok = await communityService.deleteClass(item.id, claimInput.trim());
     setDeleting(false);
@@ -61,6 +73,49 @@ export default function ClassDetailScreen() {
       router.back();
     } else {
       Alert.alert('Incorrect Code', 'The claim code did not match. Please try again.');
+    }
+  }
+
+  async function handleEnroll() {
+    if (!item || !user) {
+      Alert.alert('Sign In Required', 'Please sign in to enroll in this class.');
+      return;
+    }
+    setEnrolling(true);
+    const e = await communityService.enrollInClass(item.id);
+    setEnrolling(false);
+    if (e) {
+      setMyEnrollment(e);
+      Alert.alert('Enrolled!', 'Your enrollment request has been sent to the instructor.');
+    } else {
+      Alert.alert('Error', 'Could not complete enrollment. You may already be enrolled.');
+    }
+  }
+
+  async function handleCancelEnrollment() {
+    if (!item) return;
+    Alert.alert('Cancel Enrollment', 'Are you sure you want to cancel your enrollment?', [
+      { text: 'Keep Enrollment', style: 'cancel' },
+      { text: 'Cancel Enrollment', style: 'destructive', onPress: async () => {
+        await communityService.cancelEnrollment(item.id);
+        setMyEnrollment(null);
+      }},
+    ]);
+  }
+
+  async function handleViewEnrollments() {
+    if (!item) return;
+    const list = await communityService.getClassEnrollments(item.id);
+    setEnrollments(list);
+    setShowEnrollments(true);
+  }
+
+  async function handleUpdateStatus(enrollmentId: string, status: 'confirmed' | 'cancelled') {
+    const ok = await communityService.updateEnrollmentStatus(enrollmentId, status);
+    if (ok) {
+      setEnrollments(prev => prev.map(e =>
+        e.id === enrollmentId ? { ...e, status } : e
+      ));
     }
   }
 
@@ -86,6 +141,9 @@ export default function ClassDetailScreen() {
   const hasPhone   = !!item.contactPhone;
   const hasEmail   = !!item.contactEmail;
   const hasContact = hasPhone || hasEmail;
+  // Is the current user the owner of this listing? (checked via Supabase user_id field)
+  // We show manage controls for instructors; students see enroll button.
+  const isInstructor = profile?.role === 'instructor';
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -166,27 +224,114 @@ export default function ClassDetailScreen() {
         </Text>
       </ScrollView>
 
-      {/* Contact action bar */}
-      {hasContact && (
-        <View style={[styles.actionBar, { paddingBottom: insets.bottom + Spacing.sm }]}>
-          {hasPhone && (
+      {/* Action bar — contact + enroll */}
+      <View style={[styles.actionBar, { paddingBottom: insets.bottom + Spacing.sm }]}>
+        {/* Student: Enroll / enrolled status */}
+        {!isInstructor && user && (
+          myEnrollment ? (
             <Pressable
-              style={[styles.actionBtn, { flex: hasEmail ? 1 : undefined }]}
-              onPress={() => Linking.openURL(`tel:${item.contactPhone}`)}
+              style={[styles.actionBtn, styles.actionBtnSecondary, { flex: 1 }]}
+              onPress={handleCancelEnrollment}
             >
-              <Ionicons name="call-outline" size={18} color="#fff" />
-              <Text style={styles.actionBtnText}>Call</Text>
+              <Ionicons
+                name={myEnrollment.status === 'confirmed' ? 'checkmark-circle' : 'time-outline'}
+                size={18}
+                color={myEnrollment.status === 'confirmed' ? Colors.accentBlue : Colors.textSecondary}
+              />
+              <Text style={[styles.actionBtnText, {
+                color: myEnrollment.status === 'confirmed' ? Colors.accentBlue : Colors.textSecondary,
+              }]}>
+                {myEnrollment.status === 'confirmed' ? 'Confirmed' : 'Pending — Tap to Cancel'}
+              </Text>
             </Pressable>
-          )}
-          {hasEmail && (
+          ) : (
             <Pressable
-              style={[styles.actionBtn, styles.actionBtnSecondary, { flex: hasPhone ? 1 : undefined }]}
-              onPress={() => Linking.openURL(`mailto:${item.contactEmail}`)}
+              style={[styles.actionBtn, { flex: 1 }]}
+              onPress={handleEnroll}
+              disabled={enrolling}
             >
-              <Ionicons name="mail-outline" size={18} color={Colors.accentBlue} />
-              <Text style={[styles.actionBtnText, { color: Colors.accentBlue }]}>Email</Text>
+              {enrolling
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <>
+                    <Ionicons name="person-add-outline" size={18} color="#fff" />
+                    <Text style={styles.actionBtnText}>Enroll</Text>
+                  </>
+              }
             </Pressable>
-          )}
+          )
+        )}
+        {/* Instructor: view enrolled students */}
+        {isInstructor && (
+          <Pressable
+            style={[styles.actionBtn, styles.actionBtnSecondary, { flex: 1 }]}
+            onPress={handleViewEnrollments}
+          >
+            <Ionicons name="people-outline" size={18} color={Colors.accentBlue} />
+            <Text style={[styles.actionBtnText, { color: Colors.accentBlue }]}>View Enrolled</Text>
+          </Pressable>
+        )}
+        {/* Contact buttons */}
+        {hasPhone && (
+          <Pressable
+            style={[styles.actionBtn, { flex: hasEmail ? undefined : 1 }]}
+            onPress={() => Linking.openURL(`tel:${item.contactPhone}`)}
+          >
+            <Ionicons name="call-outline" size={18} color="#fff" />
+            <Text style={styles.actionBtnText}>Call</Text>
+          </Pressable>
+        )}
+        {hasEmail && (
+          <Pressable
+            style={[styles.actionBtn, styles.actionBtnSecondary, { flex: 1 }]}
+            onPress={() => Linking.openURL(`mailto:${item.contactEmail}`)}
+          >
+            <Ionicons name="mail-outline" size={18} color={Colors.accentBlue} />
+            <Text style={[styles.actionBtnText, { color: Colors.accentBlue }]}>Email</Text>
+          </Pressable>
+        )}
+      </View>
+
+      {/* Enrollments sheet (instructor view) */}
+      {showEnrollments && (
+        <View style={styles.overlay}>
+          <Pressable style={styles.overlayBg} onPress={() => setShowEnrollments(false)} />
+          <View style={[styles.deleteSheet, { maxHeight: '70%' }]}>
+            <Text style={styles.deleteTitle}>Enrolled Students ({enrollments.length})</Text>
+            {enrollments.length === 0 ? (
+              <Text style={styles.deleteSubtitle}>No enrollments yet.</Text>
+            ) : (
+              enrollments.map(e => (
+                <View key={e.id} style={styles.enrollmentRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.enrollmentName}>{e.studentName ?? 'Student'}</Text>
+                    <Text style={styles.enrollmentStatus}>
+                      {e.status === 'confirmed' ? '✓ Confirmed' :
+                       e.status === 'cancelled'  ? '✗ Cancelled' : '⏳ Pending'}
+                    </Text>
+                  </View>
+                  {e.status === 'pending' && (
+                    <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
+                      <Pressable
+                        style={[styles.confirmBtn, { paddingHorizontal: Spacing.md }]}
+                        onPress={() => handleUpdateStatus(e.id, 'confirmed')}
+                      >
+                        <Text style={styles.confirmText}>Confirm</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.cancelBtn, { paddingHorizontal: Spacing.md }]}
+                        onPress={() => handleUpdateStatus(e.id, 'cancelled')}
+                      >
+                        <Text style={styles.cancelText}>Decline</Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              ))
+            )}
+            <Pressable style={styles.cancelBtn} onPress={() => setShowEnrollments(false)}>
+              <Text style={styles.cancelText}>Close</Text>
+            </Pressable>
+          </View>
         </View>
       )}
 
@@ -310,4 +455,13 @@ const styles = StyleSheet.create({
   },
   confirmText: { ...Typography.body, color: '#fff', fontWeight: '600' as const },
   btnDisabled: { opacity: 0.4 },
+
+  // Enrollment row
+  enrollmentRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 1, borderBottomColor: Colors.border,
+  },
+  enrollmentName: { ...Typography.subhead, color: Colors.text, fontWeight: '600' as const },
+  enrollmentStatus: { ...Typography.caption1, color: Colors.textSecondary },
 });

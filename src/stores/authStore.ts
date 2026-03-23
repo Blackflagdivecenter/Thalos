@@ -111,7 +111,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: { data: { display_name: name, role } },
+        options: {
+          data: { display_name: name, role },
+          emailRedirectTo: 'thalos://auth/confirm',
+        },
       });
       if (error) return error.message;
       // Profile created by DB trigger (handle_new_user)

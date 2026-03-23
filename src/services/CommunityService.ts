@@ -1,6 +1,17 @@
 import { getSupabase } from '@/src/db/supabase';
+import { useAuthStore } from '@/src/stores/authStore';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface ClassEnrollment {
+  id: string;
+  classId: string;
+  studentId: string;
+  studentName: string | null;
+  studentEmail: string | null;
+  status: 'pending' | 'confirmed' | 'cancelled';
+  enrolledAt: string;
+}
 
 export interface CommunityClass {
   id: string;
@@ -86,6 +97,16 @@ interface TripRow {
   price_usd: number | null; spots_total: number | null; spots_remaining: number | null;
   description: string | null; includes: string | null; required_cert: string | null;
   contact_email: string | null; contact_phone: string | null; created_at: string;
+}
+
+interface EnrollmentRow {
+  id: string;
+  class_id: string;
+  student_id: string;
+  status: 'pending' | 'confirmed' | 'cancelled';
+  enrolled_at: string;
+  profiles?: { display_name: string | null } | null;
+  auth_users_email?: string | null;
 }
 
 interface CenterRow {
@@ -183,7 +204,9 @@ export class CommunityService {
     claimCode: string
   ): Promise<CommunityClass> {
     const sb = getSupabase();
+    const userId = useAuthStore.getState().user?.id ?? null;
     const { data, error } = await sb.from('community_classes').insert({
+      user_id: userId,
       title: input.title, agency: input.agency, cert_level: input.certLevel,
       instructor_name: input.instructorName, dive_center_name: input.diveCenterName,
       location_text: input.locationText, latitude: input.latitude, longitude: input.longitude,
@@ -199,10 +222,87 @@ export class CommunityService {
 
   async deleteClass(id: string, claimCode: string): Promise<boolean> {
     const sb = getSupabase();
+    const userId = useAuthStore.getState().user?.id;
+    // Authenticated owners can delete via RLS (user_id match)
+    if (userId) {
+      const { error } = await sb.from('community_classes').delete()
+        .eq('id', id).eq('user_id', userId);
+      if (!error) return true;
+    }
+    // Fallback: claim code for unauthenticated / legacy posts
     const { data } = await sb.from('community_classes').select('claim_code').eq('id', id).single();
     if (!data) return false;
     if ((data as { claim_code: string }).claim_code !== btoa(claimCode)) return false;
     const { error } = await sb.from('community_classes').delete().eq('id', id);
+    return !error;
+  }
+
+  // ── Enrollments ──────────────────────────────────────────────────────────────
+
+  async enrollInClass(classId: string): Promise<ClassEnrollment | null> {
+    const sb = getSupabase();
+    const userId = useAuthStore.getState().user?.id;
+    if (!userId) return null;
+    const { data, error } = await sb.from('class_enrollments').insert({
+      class_id: classId,
+      student_id: userId,
+      status: 'pending',
+    }).select().single();
+    if (error || !data) return null;
+    const r = data as EnrollmentRow;
+    return {
+      id: r.id, classId: r.class_id, studentId: r.student_id,
+      studentName: null, studentEmail: null,
+      status: r.status, enrolledAt: r.enrolled_at,
+    };
+  }
+
+  async cancelEnrollment(classId: string): Promise<boolean> {
+    const sb = getSupabase();
+    const userId = useAuthStore.getState().user?.id;
+    if (!userId) return false;
+    const { error } = await sb.from('class_enrollments')
+      .delete().eq('class_id', classId).eq('student_id', userId);
+    return !error;
+  }
+
+  async getMyEnrollment(classId: string): Promise<ClassEnrollment | null> {
+    const sb = getSupabase();
+    const userId = useAuthStore.getState().user?.id;
+    if (!userId) return null;
+    const { data, error } = await sb.from('class_enrollments')
+      .select('*').eq('class_id', classId).eq('student_id', userId).single();
+    if (error || !data) return null;
+    const r = data as EnrollmentRow;
+    return {
+      id: r.id, classId: r.class_id, studentId: r.student_id,
+      studentName: null, studentEmail: null,
+      status: r.status, enrolledAt: r.enrolled_at,
+    };
+  }
+
+  async getClassEnrollments(classId: string): Promise<ClassEnrollment[]> {
+    const sb = getSupabase();
+    const { data, error } = await sb.from('class_enrollments')
+      .select('*, profiles(display_name)')
+      .eq('class_id', classId)
+      .order('enrolled_at', { ascending: true });
+    if (error || !data) return [];
+    return (data as EnrollmentRow[]).map(r => ({
+      id: r.id, classId: r.class_id, studentId: r.student_id,
+      studentName: r.profiles?.display_name ?? null,
+      studentEmail: null,
+      status: r.status, enrolledAt: r.enrolled_at,
+    }));
+  }
+
+  async updateEnrollmentStatus(
+    enrollmentId: string,
+    status: 'confirmed' | 'cancelled'
+  ): Promise<boolean> {
+    const sb = getSupabase();
+    const { error } = await sb.from('class_enrollments')
+      .update({ status }).eq('id', enrollmentId);
     return !error;
   }
 
@@ -234,7 +334,9 @@ export class CommunityService {
     claimCode: string
   ): Promise<CommunityTrip> {
     const sb = getSupabase();
+    const userId = useAuthStore.getState().user?.id ?? null;
     const { data, error } = await sb.from('community_trips').insert({
+      user_id: userId,
       title: input.title, destination: input.destination,
       organizer_name: input.organizerName, organizer_type: input.organizerType,
       location_text: input.locationText, latitude: input.latitude, longitude: input.longitude,
@@ -250,6 +352,12 @@ export class CommunityService {
 
   async deleteTrip(id: string, claimCode: string): Promise<boolean> {
     const sb = getSupabase();
+    const userId = useAuthStore.getState().user?.id;
+    if (userId) {
+      const { error } = await sb.from('community_trips').delete()
+        .eq('id', id).eq('user_id', userId);
+      if (!error) return true;
+    }
     const { data } = await sb.from('community_trips').select('claim_code').eq('id', id).single();
     if (!data) return false;
     if ((data as { claim_code: string }).claim_code !== btoa(claimCode)) return false;
@@ -288,7 +396,9 @@ export class CommunityService {
     claimCode: string
   ): Promise<CommunityDiveCenter> {
     const sb = getSupabase();
+    const userId = useAuthStore.getState().user?.id ?? null;
     const { data, error } = await sb.from('community_dive_centers').insert({
+      user_id: userId,
       name: input.name, type: input.type,
       address: input.address, city: input.city, state_region: input.stateRegion, country: input.country,
       phone: input.phone, email: input.email, website: input.website,
@@ -305,6 +415,12 @@ export class CommunityService {
 
   async deleteCenter(id: string, claimCode: string): Promise<boolean> {
     const sb = getSupabase();
+    const userId = useAuthStore.getState().user?.id;
+    if (userId) {
+      const { error } = await sb.from('community_dive_centers').delete()
+        .eq('id', id).eq('user_id', userId);
+      if (!error) return true;
+    }
     const { data } = await sb.from('community_dive_centers').select('claim_code').eq('id', id).single();
     if (!data) return false;
     if ((data as { claim_code: string }).claim_code !== btoa(claimCode)) return false;

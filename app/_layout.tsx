@@ -10,6 +10,44 @@ import { generateId } from '@/src/utils/uuid';
 import { Colors } from '@/src/ui/theme';
 import { useUIStore } from '@/src/stores/uiStore';
 import { useAuthStore } from '@/src/stores/authStore';
+import { getSupabase } from '@/src/db/supabase';
+
+// ── Handle Supabase auth redirect URLs ────────────────────────────────────────
+// Supabase emails send links like thalos://auth/confirm#access_token=...
+// or thalos://auth/confirm?code=... (PKCE flow).
+async function handleAuthDeepLink(url: string) {
+  if (!url) return false;
+
+  // PKCE code-based flow: ?code=xxx
+  const queryString = url.split('?')[1] ?? '';
+  const queryParams = new URLSearchParams(queryString.split('#')[0]);
+  const code = queryParams.get('code');
+  if (code) {
+    const { data, error } = await getSupabase().auth.exchangeCodeForSession(code);
+    if (!error && data.session) {
+      useAuthStore.getState().initialize();
+    }
+    return true;
+  }
+
+  // Implicit / hash-based flow: #access_token=xxx&refresh_token=yyy
+  const hash = url.split('#')[1] ?? '';
+  const hashParams = new URLSearchParams(hash);
+  const accessToken  = hashParams.get('access_token');
+  const refreshToken = hashParams.get('refresh_token');
+  if (accessToken && refreshToken) {
+    const { error } = await getSupabase().auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    if (!error) {
+      useAuthStore.getState().initialize();
+    }
+    return true;
+  }
+
+  return false;
+}
 
 // ── Auth gate hook ─────────────────────────────────────────────────────────────
 
@@ -64,16 +102,26 @@ export default function RootLayout() {
     initialize();
   }, []);
 
-  // Handle deep links for collab session invites: thalos://collab?session=<uuid>
+  // Handle deep links: auth confirmation + collab invites
   useEffect(() => {
-    const handleUrl = (event: { url: string }) => {
-      const parsed = Linking.parse(event.url);
+    async function handleUrl(url: string) {
+      // Try auth deep link first (email confirm, password reset)
+      const wasAuth = await handleAuthDeepLink(url);
+      if (wasAuth) return;
+
+      // Collab session invite: thalos://collab?session=<uuid>
+      const parsed = Linking.parse(url);
       if (parsed.hostname === 'collab' && parsed.queryParams?.session) {
-        const sessionId = parsed.queryParams.session as string;
-        router.push(`/collab/session?sessionId=${sessionId}`);
+        router.push(`/collab/session?sessionId=${parsed.queryParams.session as string}`);
       }
-    };
-    const sub = Linking.addEventListener('url', handleUrl);
+    }
+
+    // App already open — incoming deep link
+    const sub = Linking.addEventListener('url', e => handleUrl(e.url));
+
+    // App opened cold from a deep link
+    Linking.getInitialURL().then(url => { if (url) handleUrl(url); });
+
     return () => sub.remove();
   }, [router]);
 
