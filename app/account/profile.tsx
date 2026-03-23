@@ -44,34 +44,23 @@ function Field({
   );
 }
 
-function RolePill({
-  label, icon, selected, onPress,
-}: { label: string; icon: string; selected: boolean; onPress: () => void }) {
-  return (
-    <Pressable style={[s.rolePill, selected && s.rolePillActive]} onPress={onPress}>
-      <Ionicons name={icon as any} size={16} color={selected ? Colors.accentBlue : Colors.textSecondary} />
-      <Text style={[s.rolePillText, selected && s.rolePillTextActive]}>{label}</Text>
-    </Pressable>
-  );
-}
-
 export default function ProfileScreen() {
   const router  = useRouter();
   const insets  = useSafeAreaInsets();
-  const { user, profile, updateProfile, signOut, loading } = useAuthStore();
+  const { user, profile, updateProfile, signOut } = useAuthStore();
 
   const [displayName,      setDisplayName]      = useState('');
-  const [role,             setRole]             = useState<'diver' | 'instructor'>('diver');
   const [certLevel,        setCertLevel]        = useState('');
   const [certAgency,       setCertAgency]       = useState('');
   const [phone,            setPhone]            = useState('');
   const [instructorNumber, setInstructorNumber] = useState('');
   const [saving,           setSaving]           = useState(false);
 
+  const role = profile?.role ?? 'diver';
+
   useEffect(() => {
     if (profile) {
       setDisplayName(profile.displayName ?? '');
-      setRole(profile.role ?? 'diver');
       setCertLevel(profile.certLevel ?? '');
       setCertAgency(profile.certAgency ?? '');
       setPhone(profile.phone ?? '');
@@ -83,7 +72,6 @@ export default function ProfileScreen() {
     setSaving(true);
     const err = await updateProfile({
       displayName: displayName.trim() || null,
-      role,
       certLevel:        certLevel.trim()        || null,
       certAgency:       certAgency.trim()        || null,
       phone:            phone.trim()             || null,
@@ -156,10 +144,17 @@ export default function ProfileScreen() {
             />
 
             <View style={s.fieldWrap}>
-              <Text style={s.fieldLabel}>I AM A</Text>
-              <View style={s.roleRow}>
-                <RolePill label="Diver"      icon="person" selected={role === 'diver'}      onPress={() => setRole('diver')} />
-                <RolePill label="Instructor" icon="school" selected={role === 'instructor'} onPress={() => setRole('instructor')} />
+              <Text style={s.fieldLabel}>ACCOUNT TYPE</Text>
+              <View style={s.roleBadgeRow}>
+                <Ionicons
+                  name={role === 'instructor' ? 'school' : 'person'}
+                  size={15}
+                  color={Colors.accentBlue}
+                />
+                <Text style={s.roleBadgeText}>
+                  {role === 'instructor' ? 'Instructor' : 'Diver'}
+                </Text>
+                <Text style={s.roleBadgeHint}> · set at signup</Text>
               </View>
             </View>
           </View>
@@ -277,15 +272,9 @@ const s = StyleSheet.create({
     backgroundColor: Colors.background,
   },
 
-  roleRow: { flexDirection: 'row', gap: Spacing.sm },
-  rolePill: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: Spacing.xs, borderRadius: 20, borderWidth: 1, borderColor: Colors.border,
-    backgroundColor: 'transparent', paddingVertical: Spacing.sm,
-  },
-  rolePillActive: { borderColor: Colors.accentBlue, backgroundColor: Colors.accentBlue + '26' },
-  rolePillText:   { ...Typography.subhead, color: Colors.textSecondary, fontWeight: '500' },
-  rolePillTextActive: { color: Colors.accentBlue, fontWeight: '600' },
+  roleBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 4 },
+  roleBadgeText: { ...Typography.subhead, color: Colors.accentBlue, fontWeight: '600' },
+  roleBadgeHint: { ...Typography.footnote, color: Colors.textTertiary },
 
   signOutBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

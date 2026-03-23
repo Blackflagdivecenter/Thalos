@@ -35,8 +35,11 @@ DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies WHERE tablename='profiles' AND policyname='Users can update own profile'
   ) THEN
+    -- WITH CHECK ensures users cannot change their own role (set at signup only)
     CREATE POLICY "Users can update own profile"
-      ON profiles FOR UPDATE USING (auth.uid() = id);
+      ON profiles FOR UPDATE
+      USING (auth.uid() = id)
+      WITH CHECK (auth.uid() = id AND role = (SELECT role FROM profiles WHERE id = auth.uid()));
   END IF;
 END $$;
 

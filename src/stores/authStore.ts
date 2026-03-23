@@ -160,7 +160,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       .from('profiles')
       .update({
         display_name: updates.displayName,
-        role: updates.role,
+        // role is intentionally excluded — set at signup only
         cert_level: updates.certLevel,
         cert_agency: updates.certAgency,
         phone: updates.phone,
