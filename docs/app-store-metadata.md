@@ -8,7 +8,9 @@ Use this when filling out App Store Connect.
 
 - **App Name:** Thalos
 - **Subtitle:** Scuba Dive Log & Planner
-- **Bundle ID:** (set in Xcode / app.json)
+- **Bundle ID:** com.thalos.app
+- **Price:** Free to download (subscription required to use)
+- **Subscription:** $2.99/month or $19.99/year · 1 month free trial
 
 ## Category
 
@@ -51,7 +53,10 @@ Manage students, run courses from 26 built-in templates, track skill sign-offs p
 **COMMUNITY**
 Discover dive classes, trips, and dive centers posted by the community. Collaborate with dive buddies — share profiles, social handles, and dive media in real time.
 
-100% free. No ads. No subscriptions. No tracking. Your dive data stays on your device.
+**SUBSCRIPTION**
+Start with a 1-month free trial. After the trial, choose $2.99/month or $19.99/year. Cancel anytime. Payment charged to your Apple ID. Subscription renews automatically unless cancelled at least 24 hours before the end of the current period. Manage or cancel in your Apple ID settings.
+
+No ads. No tracking. Your dive data stays on your device.
 
 ## Promotional Text
 
@@ -66,11 +71,13 @@ Professional scuba dive logging, planning, and safety tools — now with 510+ di
 
 - **Privacy Policy URL:** https://Blackflagdivecenter.github.io/Thalos/privacy.html
 - **Privacy Nutrition Labels:**
-  - Location: Used — linked to device (not user), collected for nearby sites feature
-  - Photos: Used — linked to device (not user), collected for dive media
-  - Identifiers: Device ID — linked to device (not user), used for community features
-  - No data used to track users
-  - No analytics collected
+  - Contact Info → Email Address: Collected, linked to user, used for account authentication
+  - User Content → Photos/Videos: Collected, linked to user, used for dive media gallery
+  - User Content → Other: Collected, linked to user (dive logs, sites, instructor records)
+  - Location: Used — not linked to user, collected for nearby sites feature
+  - Identifiers → User ID: Collected, linked to user, used for account and community features
+  - No data used to track users across other apps/websites
+  - No analytics or advertising data collected
 
 ## Export Compliance
 

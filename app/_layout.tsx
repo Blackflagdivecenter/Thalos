@@ -10,6 +10,7 @@ import { generateId } from '@/src/utils/uuid';
 import { Colors } from '@/src/ui/theme';
 import { useUIStore } from '@/src/stores/uiStore';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useSubscriptionStore } from '@/src/stores/subscriptionStore';
 import { getSupabase } from '@/src/db/supabase';
 
 // ── Handle Supabase auth redirect URLs ────────────────────────────────────────
@@ -49,22 +50,37 @@ async function handleAuthDeepLink(url: string) {
   return false;
 }
 
-// ── Auth gate hook ─────────────────────────────────────────────────────────────
+// ── Auth + Subscription gate hook ─────────────────────────────────────────────
 
-function useAuthGate(initialized: boolean) {
-  const user = useAuthStore(s => s.user);
-  const router = useRouter();
+function useAuthGate(initialized: boolean, subInitialized: boolean) {
+  const user     = useAuthStore(s => s.user);
+  const isActive = useSubscriptionStore(s => s.isActive);
+  const router   = useRouter();
   const segments = useSegments();
 
   useEffect(() => {
-    if (!initialized) return;
-    const inAuth = segments[0] === 'auth';
+    if (!initialized || !subInitialized) return;
+    const inAuth    = segments[0] === 'auth';
+    const inPaywall = segments[0] === 'paywall';
+
     if (!user && !inAuth) {
+      // Not logged in → auth screens
       router.replace('/auth/login');
     } else if (user && inAuth) {
+      // Just logged in — subscription gate next
+      if (isActive) {
+        router.replace('/(tabs)');
+      } else {
+        router.replace('/paywall');
+      }
+    } else if (user && !isActive && !inPaywall) {
+      // Logged in but no subscription → paywall
+      router.replace('/paywall');
+    } else if (user && isActive && inPaywall) {
+      // Already subscribed, somehow on paywall → app
       router.replace('/(tabs)');
     }
-  }, [user, initialized, segments]);
+  }, [user, isActive, initialized, subInitialized, segments]);
 }
 
 // ── Root Layout ───────────────────────────────────────────────────────────────
@@ -72,7 +88,8 @@ function useAuthGate(initialized: boolean) {
 export default function RootLayout() {
   const [dbReady, setDbReady] = useState(false);
   const router = useRouter();
-  const { initialized, initialize } = useAuthStore();
+  const { initialized, initialize, user } = useAuthStore();
+  const { initialized: subInitialized, initialize: initSubscription } = useSubscriptionStore();
 
   useEffect(() => {
     try {
@@ -102,6 +119,12 @@ export default function RootLayout() {
     initialize();
   }, []);
 
+  // Initialize RevenueCat once we know the user (or lack thereof)
+  useEffect(() => {
+    if (!initialized) return;
+    initSubscription(user?.id ?? null);
+  }, [initialized, user?.id]);
+
   // Handle deep links: auth confirmation + collab invites
   useEffect(() => {
     async function handleUrl(url: string) {
@@ -125,7 +148,7 @@ export default function RootLayout() {
     return () => sub.remove();
   }, [router]);
 
-  useAuthGate(initialized);
+  useAuthGate(initialized, subInitialized);
 
   if (!dbReady) {
     return (
@@ -144,6 +167,9 @@ export default function RootLayout() {
         <Stack.Screen name="auth/login"           options={{ headerShown: false, animation: 'fade' }} />
         <Stack.Screen name="auth/signup"          options={{ headerShown: false, animation: 'fade' }} />
         <Stack.Screen name="auth/forgot-password" options={{ headerShown: false }} />
+
+        {/* ── Paywall ── */}
+        <Stack.Screen name="paywall" options={{ headerShown: false, animation: 'fade' }} />
 
         {/* ── Main tabs ── */}
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
