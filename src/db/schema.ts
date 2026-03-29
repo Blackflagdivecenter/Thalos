@@ -1,3 +1,18 @@
+/** Migration 14 — linked Supabase user ID on local instructor students + sync queue */
+export const MIGRATION_14: string[] = [
+  // Link local instructor_students to Supabase user accounts
+  `ALTER TABLE instructor_students ADD COLUMN linked_user_id TEXT`,
+
+  // Pending sync queue — offline writes to Supabase that need flushing
+  `CREATE TABLE IF NOT EXISTS pending_sync (
+    id          TEXT PRIMARY KEY NOT NULL,
+    table_name  TEXT NOT NULL,
+    operation   TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+  )`,
+];
+
 /** Migration 13 — prereq proof fields on enrollments */
 export const MIGRATION_13: string[] = [
   `ALTER TABLE enrollments ADD COLUMN prereq_proof_uri TEXT`,

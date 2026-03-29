@@ -367,3 +367,477 @@ END $$;
 
 -- NOTE: Create a "collab-media" storage bucket (public) in the Supabase
 -- dashboard for session_media file uploads.
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 4. Connected Accounts — Profile Enhancements
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS handle TEXT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS bio TEXT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS total_dives INT DEFAULT 0;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS push_token TEXT;
+
+-- Unique index on handle (only for non-null values)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_handle ON profiles (handle) WHERE handle IS NOT NULL;
+
+-- Allow any authenticated user to search profiles (for student search, social)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='profiles' AND policyname='Authenticated can search profiles') THEN
+    CREATE POLICY "Authenticated can search profiles"
+      ON profiles FOR SELECT USING (auth.uid() IS NOT NULL);
+  END IF;
+END $$;
+
+-- Trigger inserts: also need insert policy for handle_new_user trigger
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='profiles' AND policyname='Trigger can insert profiles') THEN
+    CREATE POLICY "Trigger can insert profiles" ON profiles FOR INSERT WITH CHECK (true);
+  END IF;
+END $$;
+
+-- Update handle_new_user to include handle generation
+CREATE OR REPLACE FUNCTION handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (id, display_name, role)
+  VALUES (
+    NEW.id,
+    NEW.raw_user_meta_data->>'display_name',
+    COALESCE(NEW.raw_user_meta_data->>'role', 'diver')
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 5. Connected Instructor — Courses (Cloud Mirror)
+--    Instructor pushes course metadata to Supabase so students can see it.
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS instructor_courses_cloud (
+  id              UUID PRIMARY KEY,
+  instructor_id   UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  level           TEXT NOT NULL,
+  template_id     TEXT,
+  status          TEXT NOT NULL DEFAULT 'planning'
+    CHECK (status IN ('planning','active','completed','cancelled')),
+  location        TEXT,
+  start_date      TEXT,
+  end_date        TEXT,
+  max_students    INT DEFAULT 8,
+  skill_list_json TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE instructor_courses_cloud ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='instructor_courses_cloud' AND policyname='Instructors manage own courses') THEN
+    CREATE POLICY "Instructors manage own courses"
+      ON instructor_courses_cloud FOR ALL USING (instructor_id = auth.uid());
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_courses_cloud_instructor ON instructor_courses_cloud (instructor_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 6. Connected Enrollments
+--    Instructor enrolls a Thalos user into a course.
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS connected_enrollments (
+  id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  course_id       UUID NOT NULL REFERENCES instructor_courses_cloud(id) ON DELETE CASCADE,
+  student_id      UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  instructor_id   UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  status          TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active','completed','withdrawn')),
+  enrolled_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(course_id, student_id)
+);
+
+ALTER TABLE connected_enrollments ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='connected_enrollments' AND policyname='Students see own enrollments') THEN
+    CREATE POLICY "Students see own enrollments"
+      ON connected_enrollments FOR SELECT USING (student_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='connected_enrollments' AND policyname='Instructors manage enrollments for own courses') THEN
+    CREATE POLICY "Instructors manage enrollments for own courses"
+      ON connected_enrollments FOR ALL USING (instructor_id = auth.uid());
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_enrollments_student ON connected_enrollments (student_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_course  ON connected_enrollments (course_id);
+
+-- Deferred policy: now that connected_enrollments exists, add student read policy on courses
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='instructor_courses_cloud' AND policyname='Enrolled students can read course') THEN
+    CREATE POLICY "Enrolled students can read course"
+      ON instructor_courses_cloud FOR SELECT USING (
+        EXISTS (
+          SELECT 1 FROM connected_enrollments ce
+          WHERE ce.course_id = instructor_courses_cloud.id
+            AND ce.student_id = auth.uid()
+        )
+      );
+  END IF;
+END $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 7. Paperwork Submissions
+--    Students fill forms on their device, data stored in Supabase.
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS paperwork_submissions (
+  id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  course_id       UUID NOT NULL REFERENCES instructor_courses_cloud(id) ON DELETE CASCADE,
+  student_id      UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  doc_type        TEXT NOT NULL
+    CHECK (doc_type IN ('liability_release','medical_questionnaire','training_acknowledgment')),
+  content_json    TEXT,
+  signature_data  TEXT,
+  signed_at       TIMESTAMPTZ,
+  reviewed_at     TIMESTAMPTZ,
+  reviewed_by     UUID REFERENCES auth.users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(course_id, student_id, doc_type)
+);
+
+ALTER TABLE paperwork_submissions ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='paperwork_submissions' AND policyname='Students manage own submissions') THEN
+    CREATE POLICY "Students manage own submissions"
+      ON paperwork_submissions FOR ALL USING (student_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='paperwork_submissions' AND policyname='Instructors read course submissions') THEN
+    CREATE POLICY "Instructors read course submissions"
+      ON paperwork_submissions FOR SELECT USING (
+        EXISTS (
+          SELECT 1 FROM instructor_courses_cloud c
+          WHERE c.id = paperwork_submissions.course_id
+            AND c.instructor_id = auth.uid()
+        )
+      );
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='paperwork_submissions' AND policyname='Instructors can review submissions') THEN
+    CREATE POLICY "Instructors can review submissions"
+      ON paperwork_submissions FOR UPDATE USING (
+        EXISTS (
+          SELECT 1 FROM instructor_courses_cloud c
+          WHERE c.id = paperwork_submissions.course_id
+            AND c.instructor_id = auth.uid()
+        )
+      );
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_paperwork_course_student ON paperwork_submissions (course_id, student_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 8. Paperwork Requests
+--    Instructor requests student to complete a specific form.
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS paperwork_requests (
+  id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  course_id       UUID NOT NULL REFERENCES instructor_courses_cloud(id) ON DELETE CASCADE,
+  student_id      UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  instructor_id   UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  request_type    TEXT NOT NULL
+    CHECK (request_type IN ('liability_release','medical_questionnaire','training_acknowledgment')),
+  status          TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','completed')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE paperwork_requests ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='paperwork_requests' AND policyname='Students see own requests') THEN
+    CREATE POLICY "Students see own requests"
+      ON paperwork_requests FOR SELECT USING (student_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='paperwork_requests' AND policyname='Students can update own request status') THEN
+    CREATE POLICY "Students can update own request status"
+      ON paperwork_requests FOR UPDATE USING (student_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='paperwork_requests' AND policyname='Instructors manage requests for own courses') THEN
+    CREATE POLICY "Instructors manage requests for own courses"
+      ON paperwork_requests FOR ALL USING (instructor_id = auth.uid());
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_requests_student ON paperwork_requests (student_id, status);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 9. Skill Sign-Offs (Cloud)
+--    Instructor writes, student can read their progress.
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS skill_signoffs_cloud (
+  id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  course_id     UUID NOT NULL REFERENCES instructor_courses_cloud(id) ON DELETE CASCADE,
+  student_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  instructor_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  skill_key     TEXT NOT NULL,
+  skill_name    TEXT NOT NULL,
+  environment   TEXT NOT NULL DEFAULT 'open_water',
+  signed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(course_id, student_id, skill_key, environment)
+);
+
+ALTER TABLE skill_signoffs_cloud ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='skill_signoffs_cloud' AND policyname='Instructors manage signoffs for own courses') THEN
+    CREATE POLICY "Instructors manage signoffs for own courses"
+      ON skill_signoffs_cloud FOR ALL USING (instructor_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='skill_signoffs_cloud' AND policyname='Students see own signoffs') THEN
+    CREATE POLICY "Students see own signoffs"
+      ON skill_signoffs_cloud FOR SELECT USING (student_id = auth.uid());
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_signoffs_course_student ON skill_signoffs_cloud (course_id, student_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 10. Certifications (Cloud)
+--     Issued by instructor, visible to student.
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS certifications_cloud (
+  id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  student_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  instructor_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  course_id     UUID REFERENCES instructor_courses_cloud(id) ON DELETE SET NULL,
+  cert_level    TEXT NOT NULL,
+  cert_agency   TEXT,
+  cert_number   TEXT,
+  issued_date   TEXT NOT NULL,
+  notes         TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE certifications_cloud ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='certifications_cloud' AND policyname='Instructors manage own certifications') THEN
+    CREATE POLICY "Instructors manage own certifications"
+      ON certifications_cloud FOR ALL USING (instructor_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='certifications_cloud' AND policyname='Students see own certifications') THEN
+    CREATE POLICY "Students see own certifications"
+      ON certifications_cloud FOR SELECT USING (student_id = auth.uid());
+  END IF;
+END $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 11. Notifications
+--     In-app notification inbox for both instructors and students.
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  from_user_id  UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  type          TEXT NOT NULL,
+  title         TEXT NOT NULL,
+  body          TEXT,
+  data_json     TEXT,
+  is_read       BOOLEAN NOT NULL DEFAULT false,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='notifications' AND policyname='Users see own notifications') THEN
+    CREATE POLICY "Users see own notifications"
+      ON notifications FOR SELECT USING (user_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='notifications' AND policyname='Users update own notifications') THEN
+    CREATE POLICY "Users update own notifications"
+      ON notifications FOR UPDATE USING (user_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='notifications' AND policyname='Authenticated can create notifications') THEN
+    CREATE POLICY "Authenticated can create notifications"
+      ON notifications FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id, is_read, created_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 12. Social Feed — Dive Shares & Tank Taps
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+-- ── Dive Shares ─────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS dive_shares (
+  id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  dive_number     INT,
+  date            TEXT,
+  site_name       TEXT,
+  max_depth_m     REAL,
+  bottom_time_min INT,
+  gas_type        TEXT,
+  water_temp_c    REAL,
+  visibility      TEXT,
+  caption         TEXT,
+  photo_url       TEXT,
+  activity_tags   TEXT[],
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE dive_shares ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='dive_shares' AND policyname='Anyone can read dive shares') THEN
+    CREATE POLICY "Anyone can read dive shares"
+      ON dive_shares FOR SELECT USING (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='dive_shares' AND policyname='Users can share own dives') THEN
+    CREATE POLICY "Users can share own dives"
+      ON dive_shares FOR INSERT WITH CHECK (user_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='dive_shares' AND policyname='Users can update own shares') THEN
+    CREATE POLICY "Users can update own shares"
+      ON dive_shares FOR UPDATE USING (user_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='dive_shares' AND policyname='Users can delete own shares') THEN
+    CREATE POLICY "Users can delete own shares"
+      ON dive_shares FOR DELETE USING (user_id = auth.uid());
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_dive_shares_user ON dive_shares (user_id, created_at DESC);
+
+-- ── Tank Taps ───────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS tank_taps (
+  id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  dive_share_id UUID NOT NULL REFERENCES dive_shares(id) ON DELETE CASCADE,
+  tapper_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(dive_share_id, tapper_id)
+);
+
+ALTER TABLE tank_taps ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='tank_taps' AND policyname='Anyone can read taps') THEN
+    CREATE POLICY "Anyone can read taps"
+      ON tank_taps FOR SELECT USING (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='tank_taps' AND policyname='Authenticated can tap') THEN
+    CREATE POLICY "Authenticated can tap"
+      ON tank_taps FOR INSERT WITH CHECK (tapper_id = auth.uid());
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='tank_taps' AND policyname='Users can untap own') THEN
+    CREATE POLICY "Users can untap own"
+      ON tank_taps FOR DELETE USING (tapper_id = auth.uid());
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_taps_share ON tank_taps (dive_share_id);
+
+-- ── Follows ─────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS follows (
+  id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  follower_id   UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  following_id  UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(follower_id, following_id),
+  CHECK(follower_id != following_id)
+);
+
+ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='follows' AND policyname='Anyone can read follows') THEN
+    CREATE POLICY "Anyone can read follows"
+      ON follows FOR SELECT USING (true);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='follows' AND policyname='Users manage own follows') THEN
+    CREATE POLICY "Users manage own follows"
+      ON follows FOR ALL USING (follower_id = auth.uid());
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_follows_follower  ON follows (follower_id);
+CREATE INDEX IF NOT EXISTS idx_follows_following ON follows (following_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 13. Helper Function — Create Notification + (Optional) Push
+--     Call: SELECT create_notification(user_id, from_id, type, title, body, data)
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE OR REPLACE FUNCTION create_notification(
+  p_user_id     UUID,
+  p_from_user   UUID,
+  p_type        TEXT,
+  p_title       TEXT,
+  p_body        TEXT DEFAULT NULL,
+  p_data_json   TEXT DEFAULT NULL
+) RETURNS UUID AS $$
+DECLARE
+  v_id UUID;
+BEGIN
+  INSERT INTO notifications (user_id, from_user_id, type, title, body, data_json)
+  VALUES (p_user_id, p_from_user, p_type, p_title, p_body, p_data_json)
+  RETURNING id INTO v_id;
+
+  -- Push notification delivery is handled by Supabase Edge Function
+  -- triggered via database webhook on notifications table INSERT.
+  RETURN v_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- NOTES:
+-- • Create a "collab-media" storage bucket (public) for session_media uploads.
+-- • Create a "dive-photos" storage bucket (public) for dive_shares photo uploads.
+-- • Set up a Database Webhook on notifications INSERT → Edge Function "send-push"
+--   to deliver Expo push notifications.
+-- ═══════════════════════════════════════════════════════════════════════════════

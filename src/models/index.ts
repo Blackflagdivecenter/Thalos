@@ -687,3 +687,159 @@ export interface CreateCertVerificationInput {
   verifiedAt: string;
   notes?: string | null;
 }
+
+// ─── Connected Accounts (Supabase Cloud Types) ──────────────────────────────
+
+export interface CloudCourse {
+  id: string;
+  instructorId: string;
+  name: string;
+  level: string;
+  templateId: string | null;
+  status: 'planning' | 'active' | 'completed' | 'cancelled';
+  location: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  maxStudents: number;
+  skillListJson: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectedEnrollment {
+  id: string;
+  courseId: string;
+  studentId: string;
+  instructorId: string;
+  status: 'active' | 'completed' | 'withdrawn';
+  enrolledAt: string;
+  createdAt: string;
+  // Joined fields
+  studentName?: string;
+  studentHandle?: string;
+  studentAvatarUrl?: string | null;
+  courseName?: string;
+  courseLevel?: string;
+  instructorName?: string;
+}
+
+export type PaperworkDocType = 'liability_release' | 'medical_questionnaire' | 'training_acknowledgment';
+
+export interface PaperworkSubmission {
+  id: string;
+  courseId: string;
+  studentId: string;
+  docType: PaperworkDocType;
+  contentJson: string | null;
+  signatureData: string | null;
+  signedAt: string | null;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaperworkRequest {
+  id: string;
+  courseId: string;
+  studentId: string;
+  instructorId: string;
+  requestType: PaperworkDocType;
+  status: 'pending' | 'completed';
+  createdAt: string;
+}
+
+export interface CloudSkillSignoff {
+  id: string;
+  courseId: string;
+  studentId: string;
+  instructorId: string;
+  skillKey: string;
+  skillName: string;
+  environment: string;
+  signedAt: string;
+  createdAt: string;
+}
+
+export interface CloudCertification {
+  id: string;
+  studentId: string;
+  instructorId: string;
+  courseId: string | null;
+  certLevel: string;
+  certAgency: string | null;
+  certNumber: string | null;
+  issuedDate: string;
+  notes: string | null;
+  createdAt: string;
+}
+
+export type NotificationType =
+  | 'enrollment'
+  | 'paperwork_request'
+  | 'paperwork_complete'
+  | 'ack_request'
+  | 'ack_complete'
+  | 'certification'
+  | 'tank_tap'
+  | 'follow';
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  fromUserId: string | null;
+  type: NotificationType;
+  title: string;
+  body: string | null;
+  dataJson: string | null;
+  isRead: boolean;
+  createdAt: string;
+  // Joined fields
+  fromUserName?: string;
+  fromUserAvatarUrl?: string | null;
+}
+
+export interface DiveShare {
+  id: string;
+  userId: string;
+  diveNumber: number | null;
+  date: string | null;
+  siteName: string | null;
+  maxDepthM: number | null;
+  bottomTimeMin: number | null;
+  gasType: string | null;
+  waterTempC: number | null;
+  visibility: string | null;
+  caption: string | null;
+  photoUrl: string | null;
+  activityTags: string[];
+  createdAt: string;
+  // Joined fields
+  userName?: string;
+  userHandle?: string | null;
+  userAvatarUrl?: string | null;
+  tapCount?: number;
+  isTapped?: boolean;
+}
+
+export interface TankTap {
+  id: string;
+  diveShareId: string;
+  tapperId: string;
+  createdAt: string;
+}
+
+export interface Follow {
+  id: string;
+  followerId: string;
+  followingId: string;
+  createdAt: string;
+}
+
+export interface PendingSync {
+  id: string;
+  tableName: string;
+  operation: 'INSERT' | 'UPDATE' | 'DELETE';
+  payloadJson: string;
+  createdAt: string;
+}
