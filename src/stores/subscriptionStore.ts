@@ -7,7 +7,7 @@ import Purchases, {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-export const RC_API_KEY = 'test_lsgfUFWWWbiKEuFsNCEVqquGzmJ';
+export const RC_API_KEY = 'appl_YPaoVdFKIaizjHzMcSyUdXZHIvC';
 
 // The entitlement identifier you'll create in the RevenueCat dashboard
 export const ENTITLEMENT_ID = 'premium';
@@ -45,14 +45,6 @@ export const useSubscriptionStore = create<SubscriptionState>((set, get) => ({
   purchaseError: null,
 
   initialize: async (userId) => {
-    // Test keys crash release builds (RevenueCat native fatal).
-    // Skip RC entirely in that case and unlock the app for demo purposes.
-    if (!__DEV__ && RC_API_KEY.startsWith('test_')) {
-      console.warn('[Subscription] Test key detected in release build — bypassing RC.');
-      set({ initialized: true, isActive: true });
-      return;
-    }
-
     try {
       if (__DEV__) Purchases.setLogLevel(LOG_LEVEL.DEBUG);
       Purchases.configure({ apiKey: RC_API_KEY, appUserID: userId ?? undefined });
