@@ -24,8 +24,10 @@ import { useColors } from '@/src/hooks/useColors';
 import { useDiveStore } from '@/src/stores/diveStore';
 import { useSiteStore } from '@/src/stores/siteStore';
 import { useUIStore } from '@/src/stores/uiStore';
+import { useFeedStore } from '@/src/stores/feedStore';
+import { useAuthStore } from '@/src/stores/authStore';
 import { DashboardRepository, DEFAULT_WIDGET_ORDER } from '@/src/repositories/DashboardRepository';
-import type { DiveWithVersion } from '@/src/models';
+import type { DiveWithVersion, DiveShare } from '@/src/models';
 
 const M_TO_FT    = 3.28084;
 const BAR_TO_PSI = 14.5038;
@@ -34,10 +36,11 @@ const dashRepo   = new DashboardRepository();
 
 // ── Widget metadata ────────────────────────────────────────────────────────────
 
-type WidgetId = 'recentDives' | 'stats' | 'gasConsumption' | 'quickActions' | 'emergency' | 'sites' | 'discover';
+type WidgetId = 'recentDives' | 'stats' | 'gasConsumption' | 'quickActions' | 'emergency' | 'sites' | 'discover' | 'buddyFeed';
 
 const WIDGET_META: Record<WidgetId, { label: string; icon: string }> = {
   recentDives:    { label: 'Recent Dives',     icon: 'time'        },
+  buddyFeed:      { label: 'Buddy Activity',   icon: 'people'      },
   stats:          { label: 'Dive Statistics',  icon: 'bar-chart'   },
   gasConsumption: { label: 'Gas Consumption',  icon: 'speedometer' },
   quickActions:   { label: 'Quick Actions',    icon: 'flash'       },
@@ -98,6 +101,8 @@ export default function HomeScreen() {
   const { dives, stats, loadDives } = useDiveStore();
   const { sites, loadSites } = useSiteStore();
   const { unitSystem } = useUIStore();
+  const { feed, loadFeed, toggleTap } = useFeedStore();
+  const authUser = useAuthStore(s => s.user);
   const imp = unitSystem === 'imperial';
 
   const [widgetOrder, setWidgetOrder]   = useState<WidgetId[]>(DEFAULT_WIDGET_ORDER as WidgetId[]);
@@ -108,8 +113,14 @@ export default function HomeScreen() {
     React.useCallback(() => {
       loadDives();
       loadSites();
+      if (authUser) loadFeed();
       const cfg = dashRepo.getConfig();
-      setWidgetOrder(cfg.widgetOrder as WidgetId[]);
+      // Ensure buddyFeed is in the order (migration for existing users)
+      let order = cfg.widgetOrder as WidgetId[];
+      if (!order.includes('buddyFeed')) {
+        order = ['recentDives', 'buddyFeed', ...order.filter(w => w !== 'recentDives')];
+      }
+      setWidgetOrder(order);
       setHiddenWidgets(cfg.hiddenWidgets as WidgetId[]);
     }, [])
   );
@@ -265,6 +276,74 @@ export default function HomeScreen() {
                             </Text>
                           )}
                         </Pressable>
+                      </React.Fragment>
+                    ))
+                  )}
+                </WidgetCard>
+              );
+
+            case 'buddyFeed':
+              return (
+                <WidgetCard key={id} colors={colors}>
+                  <View style={wc.labelRow}>
+                    <Ionicons name="people" size={16} color={colors.text} />
+                    <Text style={[wc.label, { color: colors.text }]}>Buddy Activity</Text>
+                    <View style={{ flex: 1 }} />
+                    <Pressable onPress={() => router.push('/social/feed')}>
+                      <Text style={{ ...Typography.caption1 as any, color: colors.accentBlue, fontWeight: '600' as any }}>See All</Text>
+                    </Pressable>
+                  </View>
+                  {!authUser ? (
+                    <Text style={[wc.emptyText, { color: colors.textSecondary }]}>
+                      Sign in to see your dive buddies' activity.
+                    </Text>
+                  ) : feed.length === 0 ? (
+                    <View style={{ alignItems: 'center', paddingVertical: Spacing.md }}>
+                      <Text style={[wc.emptyText, { color: colors.textSecondary, textAlign: 'center' }]}>
+                        No buddy activity yet. Find dive buddies to see their dives here!
+                      </Text>
+                      <Pressable
+                        style={{ marginTop: Spacing.sm, flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                        onPress={() => router.push('/logbook/buddies')}
+                      >
+                        <Ionicons name="person-add" size={14} color={colors.accentBlue} />
+                        <Text style={{ ...Typography.caption1 as any, color: colors.accentBlue, fontWeight: '600' as any }}>Find Buddies</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    feed.slice(0, 5).map((share: DiveShare, i: number) => (
+                      <React.Fragment key={share.id}>
+                        {i > 0 && <View style={[wc.divider, { backgroundColor: colors.border }]} />}
+                        <View style={bf.row}>
+                          <View style={bf.avatar}>
+                            <Text style={bf.avatarText}>
+                              {(share.userName ?? '?')[0].toUpperCase()}
+                            </Text>
+                          </View>
+                          <View style={bf.info}>
+                            <Text style={[bf.name, { color: colors.text }]} numberOfLines={1}>
+                              {share.userName ?? 'Diver'}
+                            </Text>
+                            <Text style={[bf.meta, { color: colors.textSecondary }]} numberOfLines={1}>
+                              {share.siteName ?? 'Unknown site'} · {fmtDepth(share.maxDepthM ?? null, imp)}
+                            </Text>
+                          </View>
+                          <Pressable
+                            style={bf.tapBtn}
+                            onPress={() => toggleTap(share.id)}
+                          >
+                            <Ionicons
+                              name={share.isTapped ? 'hand-left' : 'hand-left-outline'}
+                              size={18}
+                              color={share.isTapped ? colors.accentBlue : colors.textSecondary}
+                            />
+                            {(share.tapCount ?? 0) > 0 && (
+                              <Text style={[bf.tapCount, { color: share.isTapped ? colors.accentBlue : colors.textSecondary }]}>
+                                {share.tapCount}
+                              </Text>
+                            )}
+                          </Pressable>
+                        </View>
                       </React.Fragment>
                     ))
                   )}
@@ -468,6 +547,23 @@ const wc = StyleSheet.create({
   sitesPin:  {},
   sitesCount: { ...(Typography.subhead as TextStyle), fontWeight: '600' as TextStyle['fontWeight'] },
   sitesAvail: { ...(Typography.caption1 as TextStyle), marginTop: 1 },
+});
+
+// ── Buddy feed styles ──────────────────────────────────────────────────────
+
+const bf = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xs },
+  avatar: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#007AFF',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  avatarText: { fontSize: 14, fontWeight: '700' as TextStyle['fontWeight'], color: '#FFF' },
+  info: { flex: 1 },
+  name: { ...(Typography.subhead as TextStyle), fontWeight: '600' as TextStyle['fontWeight'] },
+  meta: { ...(Typography.caption1 as TextStyle), marginTop: 1 },
+  tapBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 4, paddingVertical: 4 },
+  tapCount: { ...(Typography.caption1 as TextStyle), fontWeight: '600' as TextStyle['fontWeight'], fontVariant: ['tabular-nums'] } as TextStyle,
 });
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
